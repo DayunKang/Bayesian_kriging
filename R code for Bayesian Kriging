@@ -1,0 +1,77 @@
+library(coda) # for read.coda function
+library(fields) # for rdist function
+setwd("D:/")
+samples <- list()
+samples[[1]] <- read.coda(output.file="coda 1.txt", 
+                       index.file="coda index.txt")
+samples[[2]] <- read.coda(output.file="coda 2.txt", 
+                       index.file="coda index.txt")
+
+
+#### Bayesian kriging function
+bay.krige <- function(y, x, newx, loc, newloc, samples){ 
+  
+  y.new.samp <- list()
+  for (k in 1:length(samples)) {
+    
+    beta.sam <- samples[[k]][,1:8]  #posterior samples from WinBUGS
+    phi.sam <- samples[[k]][,2]
+    tau.sam <- samples[[k]][,3]   
+    sigma.sam <- samples[[k]][,4]
+    
+    y.new.samp[[k]] <- rep(0, nrow(samples[[k]]))
+    
+    for ( j in 1: nrow(samples[[k]]) ){
+      
+      beta <- beta.sam[j,]; phi <- phi.sam[j]; tau <- tau.sam[j]; sigma <- sigma.sam[j]
+      d0 <- rdist(x1=matrix(newloc, nrow=1), x2=loc)  # distance between the new point and observed point; d0i
+      cov01 <- (sigma^2)*exp(-phi*d0)
+      d <- rdist(loc)
+      
+      COV <- function(dist){
+        n <- m <- nrow(dist)
+        
+        C <- matrix(nrow=n, ncol=m)
+        
+        for (p in 1:n){
+          for (q in 1:m){
+            
+            if (p==q) {C[p,q] <- sigma^2 + tau^2}
+            else if (p<q) {C[p,q] <- (sigma^2)*exp((-phi)*(d[p,q]))+tau^2}
+            else {C[p,q] <- C[q,p]}
+            
+          }
+        }
+        return(C)
+      }
+      
+      cov <- COV(d)
+      y.new.samp[[k]][j] <- rnorm(1, sum(newx*beta)+cov01%*%solve(cov)%*%(y-x%*%beta),
+                               sqrt(sigma^2+tau^2-cov01%*%solve(cov)%*%t(cov01)))
+    }
+    if (k==length(samples)) {y.new <- mean(unlist(y.new.samp))}
+  }
+  result <- list("y.new"=y.new,"y.new.samp"=y.new.samp)
+}
+###################################################################
+
+X.obs <-as.matrix(cbind(rep(1,225),data[,c(3,23,11,13,14,16,17)]))
+X.new <- as.matrix(cbind(rep(1,nrow(X.n)),X.n[,c(1,17,9,11,12,14,15)]))
+
+# kriging 
+ypred <- c()
+ypred.sam <- list()
+t <- Sys.time() # to check the computing time (just in case)
+for (i in 1:100){
+  krg <- bay.krige(y=data$n_temp, x=X.obs, newx=X.obs[i,], loc=loc.obs, newloc=loc.obs[i,],
+                   samples=samples)
+  ypred[i] <- krg$y.new
+  ypred.sam[i] <- krg$y.new.samp
+}
+Sys.time() -t # to check the computing time (just in case)
+
+ykrg.sam <- matrix(0, nrow=100, ncol=6000)
+for (i in 1:100){
+  ykrg.sam[i,] <- unlist(ypred.sam[[i]])
+}
+write.csv(cbind(ypred,ykrg.sam), "ykrg.csv")
